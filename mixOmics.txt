@@ -1,0 +1,152 @@
+install.packages("mixOmics")
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("mixOmics", force = TRUE)
+library(mixOmics)
+library(readxl)
+human_prot <- choose.files()
+fun_prot <- choose.files()
+Bac_prot <- choose.files()
+human <- as.matrix(read_excel(human_prot)[,-1])  # Remove non-numeric columns if necessary (e.g., first column with labels)
+Fungus <- as.matrix(read_excel(fun_prot)[,-1])  # Same here
+Bac <- as.matrix(read_excel(Bac_prot)[,-1])     # And here
+
+human<-read_excel(human_prot)
+Fungus<-read_excel(fun_prot)
+Bac<-read_excel(Bac_prot)
+data = list(H_prot = human, 
+            C_prot = Fungus,
+            B_prot = Bac)
+data[["H_prot"]]
+lapply(data, dim)
+meta<-choose.files()
+met<-read_excel(meta)
+y=met$Label
+y <- as.factor(met$Label)
+summary(y)
+summary(data)
+list.keepX = c(100, 100) # select arbitrary values of features to keep
+list.keepY = c(100, 100)
+
+list.keepX = min(ncol(data[["H_prot"]]), ncol(data[["C_prot"]]))  # Use minimum available features between H_prot and C_prot
+list.keepY = min(ncol(data[["H_prot"]]), ncol(data[["B_prot"]]))
+
+keepX_HC = ncol(data[["H_prot"]])  # Number of features in human
+keepY_HC = ncol(data[["C_prot"]])  # Number of features in fungus
+
+keepX_HB = ncol(data[["H_prot"]])  # Number of features in human
+keepY_HB = ncol(data[["B_prot"]])  # Number of features in bacteria
+
+keepX_CB = ncol(data[["C_prot"]])  # Number of features in fungus
+keepY_CB = ncol(data[["B_prot"]])  # Number of features in bacteria
+#str(data)
+#names(data)
+#is.null(data[["H_prot"]])  # Check if H_prot is NULL
+#is.null(data[["C_prot"]])  # Check if F_prot is NULL
+#is.null(data[["B_prot"]])  # Check if B_prot is NULL
+
+# generate three pairwise PLS models
+pls1 <- spls(data[["H_prot"]], data[["C_prot"]], 
+             keepX = rep(list.keepX, 2), keepY = rep(list.keepY, 2)) 
+pls2 <- spls(data[["H_prot"]], data[["B_prot"]], 
+             keepX = rep(list.keepX, 2), keepY = rep(list.keepY, 2))
+pls3 <- spls(data[["C_prot"]], data[["B_prot"]], 
+             keepX = rep(list.keepX, 2), keepY = rep(list.keepY, 2))
+
+# plot features of first PLS
+plotVar(pls1, cutoff = 0.3, title = "(a) H_prot vs F_prot", 
+        legend = c("H_prot", "C_prot"), 
+        var.names = FALSE, style = 'graphics', 
+        pch = c(16, 17), cex = c(2,2), 
+        col = c('darkorchid', 'lightgreen'))
+
+# plot features of second PLS
+plotVar(pls2, cutoff = 0.5, title = "(b) H_prot vs B_prot", 
+        legend = c("H_prot", "B_prot"), 
+        var.names = FALSE, style = 'graphics', 
+        pch = c(16, 17), cex = c(2,2), 
+        col = c('darkorchid', 'lightgreen'))
+
+# plot features of third PLS
+plotVar(pls3, cutoff = 0.5, title = "(c) F_prot vs B_prot", 
+        legend = c("F_prot", "B_prot"), 
+        var.names = FALSE, style = 'graphics', 
+        pch = c(16, 17), cex = c(2,2), 
+        col = c('darkorchid', 'lightgreen'))
+#correlaton of H_prot with C_prot
+cor(pls1$variates$X, pls1$variates$Y)
+#correlaton of H_prot with B_prot
+cor(pls2$variates$X, pls2$variates$Y) 
+#correlaton of C_prot with B_prot
+cor(pls3$variates$X, pls3$variates$Y) 
+# for square matrix filled with 0.1s
+design = matrix(0.1, ncol = length(data), nrow = length(data), 
+                dimnames = list(names(data), names(data)))
+diag(design) = 0 # set diagonal to 0s
+
+design
+# form basic DIABLO model
+basic.diablo.model = block.splsda(X = data, Y = y, ncomp = 5, design = design) 
+# run component number tuning with repeated CV
+perf.diablo = perf(basic.diablo.model, validation = 'Mfold', 
+                   folds = 10, nrepeat = 10) 
+
+plot(perf.diablo) # plot output of tuning
+# set the optimal ncomp value
+ncomp = perf.diablo$choice.ncomp$WeightedVote["Overall.BER", "centroids.dist"] 
+# show the optimal choice for ncomp for each dist metric
+perf.diablo$choice.ncomp$WeightedVote 
+test.keepX = list (H_prot = c(5:9, seq(10, 18, 2), seq(20,30,5)), 
+                   C_prot = c(5:9, seq(10, 18, 2), seq(20,30,5)),
+                   B_prot = c(5:9, seq(10, 18, 2), seq(20,30,5)))
+
+# run the feature selection tuning
+tune.TCGA = tune.block.splsda(X = data, Y = y, ncomp = ncomp, 
+                              test.keepX = test.keepX, design = design,
+                              validation = 'Mfold', folds = 10, nrepeat = 1,
+                              dist = "centroids.dist")
+list.keepX = tune.TCGA$choice.keepX # set the optimal values of features to retain
+list.keepX
+# set the optimised DIABLO model
+final.diablo.model = block.splsda(X = data, Y = y, ncomp = ncomp, 
+                                  keepX = list.keepX, design = design)
+final.diablo.model$design # design matrix for the final model
+selectVar(final.diablo.model, block = 'H_prot', comp = 1)$H_prot$name
+selectVar(final.diablo.model, block = 'C_prot', comp = 1)$C_prot$name 
+selectVar(final.diablo.model, block = 'B_prot', comp = 1)$B_prot$name 
+plotDiablo(final.diablo.model, ncomp = 1)
+plotIndiv(final.diablo.model, ind.names = FALSE, legend = TRUE, 
+          title = 'DIABLO Sample Plots')
+plotArrow(final.diablo.model, ind.names = FALSE, legend = TRUE, 
+          title = 'DIABLO')
+plotVar(final.diablo.model, var.names = FALSE, 
+        style = 'graphics', legend = TRUE,
+        pch = c(16, 17, 15), cex = c(2,2,2), 
+        col = c('darkorchid', 'brown1', 'lightgreen'))
+
+correlations <- final.diablo.model$variates$X
+
+# Scale line width based on correlations, setting a range for line width
+line_widths <- scales::rescale(abs(correlations), to = c(1, 5)) 
+
+circosPlot(final.diablo.model, cutoff = 0.3, line = TRUE,
+           color.blocks= c('darkorchid', 'brown1', 'lightgreen'),
+           color.cor = c("chocolate3","grey20"), size.labels = 2, link.lwd = 50)
+
+
+network(final.diablo.model, blocks = c(1,2,3),
+        color.node = c('darkorchid', 'brown1', 'lightgreen'), cutoff = 0.3)
+
+library(igraph)
+my.network = network(final.diablo.model, blocks = c(1,2,3),
+                     color.node = c('darkorchid', 'brown1', 'lightgreen'), cutoff = 0.3)
+write_graph(my.network$gR, file = "myNetwork.gml", format = "gml")
+
+summary(my.network)
+print(my.network)
+class(my.network)
+
+plotLoadings(final.diablo.model, comp = 2, contrib = 'max', method = 'median')
+
+cimDiablo(final.diablo.model)
